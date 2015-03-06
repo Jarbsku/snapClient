@@ -1,0 +1,287 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<title>SnapDuds</title>
+
+	<style>
+		body {
+			background-color: #000000;
+		}
+		canvas {
+			height: 100%;
+			width: 100%;
+			background-color: #222222;
+			border: 1px solid #222222;
+			border-radius: 15px;
+			-webkit-mask-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAA5JREFUeNpiYGBgAAgwAAAEAAGbA+oJAAAAAElFTkSuQmCC);
+		}
+		
+		
+	</style>
+	
+	<!--bootstrap shiets-->
+	<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css">
+	<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+	
+	
+	<script src="https://rawgit.com/photonstorm/phaser/master/build/phaser.min.js"></script>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+	<script src="/socket.io/socket.io.js"></script>
+	<script src="./objects/Entity.js"></script>
+	<script src="./objects/ObjectList.js"></script>
+	<script src="./tools/SpriteBuilder.js"></script>
+	<script src="./tools/Effects.js"></script>
+	<script src="./tools/Timer.js"></script>
+	<script src="./tools/Movement.js"></script>
+	<script src="./tools/ParticleMachine.js"></script>
+	<script src="./Filters.js"></script>
+	<script>
+	
+	/*global Phaser io SpriteBuilder ObjectList Entity Effects Timer MagicEffects Movement*/
+	
+		var game = new Phaser.Game(800, 600, Phaser.AUTO, 'gameDiv', {
+			preload: preload,
+			create: create,
+			update: update
+		});
+
+		var objectList;
+		var spriteBuilder;
+		var particleMachine;
+		var socket;
+
+		/*its some kind of magic. ONE DREAM ONE GOAL ONE HEARTH ONE SOUL */
+		var effects;
+		var timer = new Timer();
+		
+		var lastMove = 's';
+		
+		var filters = {};
+		
+		var cameraScale = {
+			x: 2,
+			y:2
+		};
+
+		function preload() {
+			game.load.script('filter', 'https://cdn.rawgit.com/photonstorm/phaser/master/filters/Plasma.js');
+			spriteBuilder = new SpriteBuilder(game);
+			// Change the background color of the game
+			game.load.audio('nightmusic', ['assets/music/NightMP3.mp3']);
+			game.load.audio('daymusic', ['assets/music/DayMP3.mp3']);
+			
+		}
+
+		var graphics;
+		
+		var nightmusic;
+		var daymusic;
+		
+		
+		
+		
+		function create() {
+			
+			
+			game.physics.startSystem(Phaser.Physics.ARCADE);
+			game.stage.backgroundColor = '000000';
+			game.scale.fullScreenScaleMode = Phaser.ScaleManager.EXACT_FIT;
+			game.stage.disableVisibilityChange = true;
+			
+			
+			particleMachine = new ParticleMachine(game);
+			
+			objectList = new ObjectList(game, spriteBuilder);
+			effects = new MagicEffects();
+
+			initFilters(game);
+
+			keyboardHandler = new Movement();
+			
+			initSockets();
+			game.world.setBounds(-500, -500, 5000, 5000);
+			game.world.scale.setTo(cameraScale.x,cameraScale.y);
+			//game.input.onDown.add(goFull, this);
+			
+			nightmusic = game.add.audio('nightmusic');
+			daymusic = game.add.audio('daymusic');
+		//	music.loop = true;
+		//	music.play();
+
+		//	music.volume = 0.5;
+			
+			// ilman tätä phaser ei laske fps ollenkaan
+			game.time.advancedTiming = true;
+			
+			
+		}
+
+		function goFull() {
+
+			if (game.scale.isFullScreen) {
+				game.scale.stopFullScreen();
+			}
+			else {
+				game.scale.startFullScreen(false);
+			}
+
+		}
+
+		function update() {
+			if(objectList) {
+				if(objectList.playerList && objectList.hero) {
+					
+					timer.tick(effects.showPlayers);
+					spriteBuilder.update();
+					effects.update();
+					filters.bgFilter.update(game.input.activePointer);
+					filters.teleFilter.update();
+				 	debugPrints();
+					
+					
+				}
+			}
+			keyboardHandler.movementListener();
+			sendMovement(keyboardHandler.move);
+		}
+		
+		var rigidMessages = 0;
+		var objectMessages = 0;
+		var characterMessages = 0;
+		var knockbackMessages = 0;
+		function debugPrints() {
+				game.debug.text(game.time.fps + "fps" || '--', 2, 14, "#00ff00");  
+				
+				var timeOfDay;
+				switch(effects.currentDayTime) {
+					case 'n':
+						timeOfDay = "night";
+						break;
+					case 'm':
+						timeOfDay = "morning";
+						break;
+					case 'd':
+						timeOfDay = "day";
+						break;
+					case 'e':
+						timeOfDay = "evening";
+						break;
+					default:
+						timeOfDay = "not received";
+						break;
+				}
+				game.debug.text(timeOfDay || '--', 2, 28, "#00ff00");  
+				game.debug.text("camera.x: "+ game.camera.position.x + " camera.y: " + game.camera.position.y || '--', 2, 50, "#00ff00");  
+				game.debug.text("k:"+knockbackMessages+" c:"+characterMessages+" o:"+objectMessages+" r:"+rigidMessages || '--', 600, 580, "#00ff00");  
+				
+		}
+		
+		//setInterval(function(){timer.tick(effects.showPlayers)}, 1000 / 30);
+		
+		function initSockets() {
+
+			socket = io();
+			socket.on('character', function(msg) {
+				//console.log("character: ");
+				characterMessages++;
+				var character = new Entity(msg, true);
+				objectList.push(character, msg.serverTime);
+			});
+
+			socket.on('object', function(msg) {
+				//console.log("tile: ");
+				//console.log(msg);
+				objectMessages++;
+				var object = new Entity(msg);
+
+				objectList.push(object);
+			});
+			
+			socket.on('knockback', function(msg) {
+				knockbackMessages++;
+			    var object = new Entity(msg);
+			    console.log(msg);
+			    object.move = 'k';
+			    objectList.push(object);
+			});
+
+			socket.on('hero', function(msg) {
+
+				objectList.setHero(msg.playerId);
+
+			});
+			socket.on('rigidObject', function(msg) {
+				rigidMessages++;
+				console.log("you got some balls aa");
+				console.log(msg);
+				var object = new Entity(msg);
+				objectList.push(object);	
+				
+			});
+			socket.on('sectionInfo', function(msg) {
+				spriteBuilder.destroySpriteGroups();
+				objectList.playerList = [];
+				objectList.tileList = [];
+				objectList.setBounds(msg.width, msg.height);
+				effects.currentDayTime = msg.dayTime;
+				effects.lightsOn();
+
+			});
+			socket.on('disconnectMessage', function(msg) {
+				objectList.destroy(msg);	
+			});
+			socket.on('dayCycle', function(msg){
+				effects.currentDayTime = msg;
+				console.log(msg);
+			});
+		}
+
+		function sendMovement(move) {
+			if (lastMove != move) {
+				lastMove = move;
+				socket.emit('move', {
+					move: move
+				});
+			}
+		}
+		
+	</script>
+
+</head>
+
+<body>
+	<div align="center" class="wrapper">
+		<span style="color:green"><b >move: W,S,A,D or arrows | kick: spacebar | experiment with friends</b></span>
+		<div id="Inventory">
+		<div id="gameDiv">
+		<div id="chat">
+		<div id="bottomBar">
+			
+	</div>
+	
+
+		<script>
+		</script>
+
+		<style>
+			body {
+				height: 100%;
+				background: black;
+			}
+			
+			.wrapper{
+				min-height: 100%;
+				height: 100%;
+				margin: 0 auto -20px;
+				background: black;
+				
+			}
+
+			
+		</style>
+
+
+</body>
+
+</html>
